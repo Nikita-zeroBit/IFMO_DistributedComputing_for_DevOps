@@ -20,6 +20,7 @@
           - docker.io
           - python3-pip
           - python3-docker
+          - python3-mysqldb
         state: present
         update_cache: yes
 
@@ -84,6 +85,27 @@
           CREATE USER IF NOT EXISTS '{{ repl_user }}'@'%' IDENTIFIED BY '{{ repl_password }}';
           GRANT REPLICATION SLAVE ON *.* TO '{{ repl_user }}'@'%';
           FLUSH PRIVILEGES;
+
+    - name: Получение текущего лог-файла и позиции
+      community.mysql.mysql_query:
+        login_host: 127.0.0.1
+        login_port: "{{ mysql_primary_port }}"
+        login_user: "{{ mysql_user }}"
+        login_password: "{{ mysql_root_password }}"
+        query: "SHOW MASTER STATUS;"
+      register: master_status
+
+    - name: Установка переменных для репликации
+      set_fact:
+        master_log_file: "{{ master_status.query_result[0].File }}"
+        master_log_pos: "{{ master_status.query_result[0].Position }}"
+    
+    - name: Проверка, что репликация настроена
+      assert:
+        that:
+          - master_log_file is defined
+          - master_log_pos is defined
+        fail_msg: "Не удалось получить информацию о мастер-лог-файле и позиции."
 
     # Создание и настройка реплики MySQL
 
