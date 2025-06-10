@@ -1,8 +1,8 @@
 ---
 - name: Установка и настройка WordPress и MySQL
   hosts: all
-  gather_facts: no
-  become: yes
+  gather_facts: false
+  become: true
   vars:
     mysql_root_password: "root1234"
     mysql_database: "wordpress_database"
@@ -15,39 +15,39 @@
 
   tasks:
     - name: Установка необходимых пакетов
-      apt:
+      ansible.builtin.apt:
         name:
           - docker.io
           - python3-pip
           - python3-docker
           - python3-mysqldb
         state: present
-        update_cache: yes
+        update_cache: true
 
     - name: Запущен ли Docker
-      systemd:
+      ansible.builtin.systemd:
         name: docker
         state: started
         enabled: true
 
     - name: Создание Docker сети
-      docker_network:
+      community.docker.docker_network:
         name: wp_net
         state: present
 
     - name: Получение образа MySQL
-      docker_image:
+      community.docker.docker_image:
         name: mysql:5.7
         source: pull
 
     - name: Получение образа WordPress
-      docker_image:
+      community.docker.docker_image:
         name: wordpress:latest
         source: pull
-    
+
     # Создание и настройка мастер контейнера MySQL
     - name: Запуск мастер MySQL в контейнере
-      docker_container:
+      community.docker.docker_container:
         name: mysql_primary
         image: mysql:5.7
         restart_policy: always
@@ -70,7 +70,7 @@
           - mysql_primary_data:/var/lib/mysql
 
     - name: Проверка что мастер MySQL доступен
-      wait_for:
+      ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ mysql_primary_port }}"
         delay: 5
@@ -96,12 +96,12 @@
       register: master_status
 
     - name: Установка переменных для репликации
-      set_fact:
+      ansible.builtin.set_fact:
         master_log_file: "{{ master_status.query_result[0][0].File }}"
         master_log_pos: "{{ master_status.query_result[0][0].Position }}"
-    
+
     - name: Проверка, что репликация настроена
-      assert:
+      ansible.builtin.assert:
         that:
           - master_log_file is defined
           - master_log_pos is defined
@@ -110,7 +110,7 @@
     # Создание и настройка реплики MySQL
 
     - name: Запуск реплика MySQL в контейнере
-      docker_container:
+      community.docker.docker_container:
         name: mysql_replica
         image: mysql:5.7
         restart_policy: always
@@ -131,7 +131,7 @@
           - mysql_replica_data:/var/lib/mysql
 
     - name: Проверка что реплика MySQL доступна
-      wait_for:
+      ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ mysql_replica_port }}"
         delay: 5
@@ -161,10 +161,17 @@
         login_password: "{{ mysql_root_password }}"
         query: "SHOW SLAVE STATUS;"
       register: replica_status
-      ignore_errors: yes
+      ignore_errors: true
+
+    - name: Проверка успешности репликации
+      ansible.builtin.assert:
+        that:
+          - replica_status.query_result[0][0].Slave_IO_Running == 'Yes'
+          - replica_status.query_result[0][0].Slave_SQL_Running == 'Yes'
+        fail_msg: "Репликация MySQL не настроена корректно."
 
     - name: Запуск WordPress в контейнере
-      docker_container:
+      community.docker.docker_container:
         name: wordpress
         image: wordpress:latest
         state: started
@@ -182,7 +189,7 @@
           - wp_data:/var/www/html
 
     - name: WordPress работает корректно
-      uri:
+      ansible.builtin.uri:
         url: "http://localhost:80"
         status_code: 200
         timeout: 10
@@ -190,4 +197,3 @@
       until: wordpress_status.status == 200
       retries: 10
       delay: 5
-
