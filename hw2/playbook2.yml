@@ -51,7 +51,7 @@
         image: mysql:5.7
         restart_policy: always
         state: started
-        ports:
+        published_ports:
           - "{{ mysql_primary_port }}:3306"
         networks:
           - name: wp_net
@@ -70,10 +70,9 @@
 
     - name: Проверка что мастер MySQL доступен
       wait_for:
-        host: mysql_primary
+        host: 127.0.0.1
         port: "{{ mysql_primary_port }}"
         delay: 5
-        state: started
 
     - name: Create replication user on primary
       community.mysql.mysql_query:
@@ -86,6 +85,35 @@
           GRANT REPLICATION SLAVE ON *.* TO '{{ repl_user }}'@'%';
           FLUSH PRIVILEGES;
 
+    # Создание и настройка реплики MySQL
+
+    - name: Запуск реплика MySQL в контейнере
+      docker_container:
+        name: mysql_replica
+        image: mysql:5.7
+        restart_policy: always
+        state: started
+        published_ports:
+          - "{{ mysql_replica_port }}:3306"
+        networks:
+          - name: wp_net
+        env:
+          MYSQL_ROOT_PASSWORD: "{{ mysql_root_password }}"
+        command: >
+          --server-id=2
+          --relay-log=relay-bin
+          --log-bin=mysql-bin
+          --binlog-format=ROW
+          --bind-address=0.0.0.0
+        volumes:
+          - mysql_replica_data:/var/lib/mysql
+
+    - name: Проверка что реплика MySQL доступна
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ mysql_replica_port }}"
+        delay: 5
+
     - name: Запуск WordPress в контейнере
       docker_container:
         name: wordpress
@@ -94,13 +122,15 @@
         restart_policy: always
         published_ports:
           - "80:80"
+        networks:
+          - name: wp_net
         env:
-          WORDPRESS_DB_HOST: "mysql:3306"
+          WORDPRESS_DB_HOST: "127.0.0.1:3307"
           WORDPRESS_DB_NAME: "{{ mysql_database }}"
           WORDPRESS_DB_USER: "{{ mysql_user }}"
           WORDPRESS_DB_PASSWORD: "{{ mysql_password }}"
         depends_on:
-          - mysql
+          - mysql_primary
 
     - name: WordPress работает корректно
       uri:
@@ -111,4 +141,8 @@
       until: wordpress_status.status == 200
       retries: 10
       delay: 5
+
+  volumes:
+    mysql_primary_data:
+    mysql_replica_data:
 
