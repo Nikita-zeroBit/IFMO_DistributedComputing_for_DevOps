@@ -23,7 +23,7 @@
           - python3-docker
           - python3-mysqldb
         state: present
-        update_cache: true
+        update_cache: false
 
     - name: Запущен ли Docker
       ansible.builtin.systemd:
@@ -65,7 +65,10 @@
         command: >
           --server-id=1
           --log-bin=mysql-bin
+          --gtid-mode=ON
+          --enforce-gtid-consistency
           --binlog-format=ROW
+          --relay-log=relay-log
           --bind-address=0.0.0.0
         volumes:
           - mysql_primary_data:/var/lib/mysql
@@ -78,28 +81,17 @@
         delay: 5
         timeout: 60
 
-    - name: Ждём, пока MySQL master внутри контейнера ответит ping
-      community.docker.docker_container_exec:
-        container: mysql_primary
-        command: mysqladmin -h127.0.0.1 --protocol=TCP -uroot -p{{ mysql_root_password }} ping
-      register: ping
-      retries: 10
-      delay: 3
-      until: ping.stdout is search("mysqld is alive")
-
-    - name: Создание дампа базы # Необходимо для того, чтобы на replica появилась база wordpress_database
-      community.docker.docker_container_exec:
-        container: mysql_primary
-        command: >
-          mysqldump -h127.0.0.1 -uroot -p{{ mysql_root_password }} --all-databases --flush-logs
-            --master-data=2 --skip-lock-tables --hex-blob 
-        chdir: /
-      register: mysql_dump_output
-
-    - name: Сохранение дампа в файл
-      copy:
-        content: "{{ mysql_dump_output.stdout }}"
-        dest: "{{ mysql_dump_path }}"
+    - name: Ожидание доступности MySQL Master
+      community.mysql.mysql_info:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        login_host: 127.0.0.1
+        login_port: "{{ mysql_primary_port }}"
+      register: mysql_primary_reachable
+      until: mysql_primary_reachable is success
+      retries: 30
+      delay: 10
+      become: yes
 
     - name: Создание пользователя для репликации MySQL
       community.mysql.mysql_user:
@@ -113,26 +105,26 @@
         priv: "*.*:REPLICATION SLAVE"
         state: present
 
-    - name: Получение текущего лог-файла и позиции
-      community.mysql.mysql_replication:
-        mode: getprimary
-        login_host: 127.0.0.1
-        login_port: "{{ mysql_primary_port }}"
-        login_user: root
-        login_password: "{{ mysql_root_password }}"
-      register: master_status
+    # - name: Получение текущего лог-файла и позиции
+    #   community.mysql.mysql_replication:
+    #     mode: getprimary
+    #     login_host: 127.0.0.1
+    #     login_port: "{{ mysql_primary_port }}"
+    #     login_user: root
+    #     login_password: "{{ mysql_root_password }}"
+    #   register: master_status
 
-    - name: Установка переменных для репликации
-      ansible.builtin.set_fact:
-        master_log_file: "{{ master_status.File }}"
-        master_log_pos: "{{ master_status.Position }}"
+    # - name: Установка переменных для репликации
+    #   ansible.builtin.set_fact:
+    #     master_log_file: "{{ master_status.File }}"
+    #     master_log_pos: "{{ master_status.Position }}"
 
-    - name: Проверка, что репликация настроена
-      ansible.builtin.assert:
-        that:
-          - master_log_file is defined
-          - master_log_pos is defined
-        fail_msg: "Не удалось получить информацию о мастер-лог-файле и позиции."
+    # - name: Проверка, что репликация настроена
+    #   ansible.builtin.assert:
+    #     that:
+    #       - master_log_file is defined
+    #       - master_log_pos is defined
+    #     fail_msg: "Не удалось получить информацию о мастер-лог-файле и позиции."
 
     # Создание и настройка реплики MySQL
 
@@ -150,7 +142,11 @@
           MYSQL_ROOT_PASSWORD: "{{ mysql_root_password }}"
         command: >
           --server-id=2
-          --relay-log=relay-bin
+          --log-bin=mysql-bin
+          --gtid-mode=ON
+          --enforce-gtid-consistency
+          --binlog-format=ROW
+          --relay-log=relay-log
           --bind-address=0.0.0.0
         volumes:
           - mysql_replica_data:/var/lib/mysql
@@ -160,36 +156,19 @@
         host: 127.0.0.1
         port: "{{ mysql_replica_port }}"
         delay: 5
+        timeout: 60
 
-    - name: Ждём, пока MySQL replica внутри контейнера ответит ping
-      community.docker.docker_container_exec:
-        container: mysql_replica
-        command: mysqladmin -h127.0.0.1 --protocol=TCP -uroot -p{{ mysql_root_password }} ping
-      register: ping
-      retries: 10
-      delay: 3
-      until: ping.stdout is search("mysqld is alive")
-
-    - name: Передаём дамп в mysql_replica
-      community.docker.docker_container_exec:
-        container: mysql_replica
-        command: sh -c "cat > /tmp/mysql_dump.sql"
-        stdin: "{{ lookup('file', mysql_dump_path) }}"
-
-    # Импортируем дамп для того чтобы появилась база wordpress_database с мастера, которая создана до начала репликации
-    - name: Импортируем дамп в реплику
-      community.docker.docker_container_exec:
-        container: mysql_replica
-        command: |
-          sh -c "mysql -h127.0.0.1 --protocol=TCP -uroot -p{{ mysql_root_password }} < {{ mysql_dump_path }}"
-
-    - name: Остановить репликацию на слейве
-      community.mysql.mysql_replication:
-        mode: stopreplica
+    - name: Ожидание доступности MySQL Replica
+      community.mysql.mysql_info:
         login_user: root
         login_password: "{{ mysql_root_password }}"
-        login_host: 127.0.0.1   
+        login_host: 127.0.0.1
         login_port: "{{ mysql_replica_port }}"
+      register: mysql_replica_reachable
+      until: mysql_replica_reachable is success
+      retries: 30
+      delay: 10
+      become: yes
 
     - name: Настройка репликации MySQL
       community.mysql.mysql_replication:
@@ -202,8 +181,7 @@
         master_port: 3306
         master_user: "{{ repl_user }}"
         master_password: "{{ repl_password }}"
-        master_log_file: "{{ master_log_file }}"
-        master_log_pos: "{{ master_log_pos }}"
+        master_auto_position: true
 
     - name: Запуск репликации
       community.mysql.mysql_replication:
