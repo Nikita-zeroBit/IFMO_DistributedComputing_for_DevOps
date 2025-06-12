@@ -105,27 +105,6 @@
         priv: "*.*:REPLICATION SLAVE"
         state: present
 
-    # - name: Получение текущего лог-файла и позиции
-    #   community.mysql.mysql_replication:
-    #     mode: getprimary
-    #     login_host: 127.0.0.1
-    #     login_port: "{{ mysql_primary_port }}"
-    #     login_user: root
-    #     login_password: "{{ mysql_root_password }}"
-    #   register: master_status
-
-    # - name: Установка переменных для репликации
-    #   ansible.builtin.set_fact:
-    #     master_log_file: "{{ master_status.File }}"
-    #     master_log_pos: "{{ master_status.Position }}"
-
-    # - name: Проверка, что репликация настроена
-    #   ansible.builtin.assert:
-    #     that:
-    #       - master_log_file is defined
-    #       - master_log_pos is defined
-    #     fail_msg: "Не удалось получить информацию о мастер-лог-файле и позиции."
-
     # Создание и настройка реплики MySQL
 
     - name: Запуск реплика MySQL в контейнере
