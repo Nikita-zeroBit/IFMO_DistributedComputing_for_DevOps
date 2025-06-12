@@ -72,7 +72,7 @@
           --bind-address=0.0.0.0
         volumes:
           - mysql_primary_data:/var/lib/mysql
-        recreate: yes
+        recreate: true
 
     - name: Проверка что мастер MySQL доступен
       ansible.builtin.wait_for:
@@ -91,7 +91,7 @@
       until: mysql_primary_reachable is success
       retries: 30
       delay: 10
-      become: yes
+      become: true
 
     - name: Создание пользователя для репликации MySQL
       community.mysql.mysql_user:
@@ -147,7 +147,7 @@
       until: mysql_replica_reachable is success
       retries: 30
       delay: 10
-      become: yes
+      become: true
 
     - name: Настройка репликации MySQL
       community.mysql.mysql_replication:
@@ -186,7 +186,7 @@
           - replica_status.Slave_SQL_Running == 'Yes'
         fail_msg: "Репликация MySQL не настроена корректно {{ replica_status }}."
 
-    - name: Создание тестовой базы данных на мастере для проверки репликации 
+    - name: Создание тестовой базы данных на мастере для проверки репликации
       community.mysql.mysql_db:
         name: "wordpress2"
         login_host: 127.0.0.1
