@@ -23,7 +23,7 @@
           - python3-docker
           - python3-mysqldb
         state: present
-        update_cache: false
+        update_cache: true
 
     - name: Запущен ли Docker
       ansible.builtin.systemd:
