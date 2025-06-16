@@ -129,18 +129,16 @@
           GF_SECURITY_ADMIN_USER: "{{ grafana_user }}"
           GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_password }}"
           GF_SERVER_HTTP_ADDR: "0.0.0.0"
-        healthcheck:
-          test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
-          interval: 10s
-          timeout: 5s
-          retries: 10
     
     - name: Проверка что Grafana доступна
-      wait_for:
-        host: 127.0.0.1
-        port: "{{ grafana_port }}"
-        timeout: 60
-        delay: 5
+      uri:
+        url: "http://localhost:3001/api/health"
+        method: GET
+        status_code: 200
+      register: grafana_health
+      retries: 5
+      delay: 10
+      until: grafana_health.status == 200
 
   pre_tasks:
     - name: Ожидание доступности mysql_primary
