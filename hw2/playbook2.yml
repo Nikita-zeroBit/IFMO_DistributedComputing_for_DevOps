@@ -12,6 +12,7 @@
     repl_password: "replication_pass"
     mysql_primary_port: 3307
     mysql_replica_port: 3308
+    mysql_dump_path: "/tmp/mysql_dump.sql"
 
   tasks:
     - name: Установка необходимых пакетов
@@ -64,48 +65,45 @@
         command: >
           --server-id=1
           --log-bin=mysql-bin
+          --gtid-mode=ON
+          --enforce-gtid-consistency
           --binlog-format=ROW
+          --relay-log=relay-log
           --bind-address=0.0.0.0
         volumes:
           - mysql_primary_data:/var/lib/mysql
+        recreate: true
 
     - name: Проверка что мастер MySQL доступен
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ mysql_primary_port }}"
         delay: 5
+        timeout: 60
+
+    - name: Ожидание доступности MySQL Master
+      community.mysql.mysql_info:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        login_host: 127.0.0.1
+        login_port: "{{ mysql_primary_port }}"
+      register: mysql_primary_reachable
+      until: mysql_primary_reachable is success
+      retries: 30
+      delay: 10
+      become: true
 
     - name: Создание пользователя для репликации MySQL
-      community.mysql.mysql_query:
+      community.mysql.mysql_user:
         login_host: 127.0.0.1
         login_port: "{{ mysql_primary_port }}"
         login_user: root
         login_password: "{{ mysql_root_password }}"
-        query: |
-          CREATE USER IF NOT EXISTS '{{ repl_user }}'@'%' IDENTIFIED BY '{{ repl_password }}';
-          GRANT REPLICATION SLAVE ON *.* TO '{{ repl_user }}'@'%';
-          FLUSH PRIVILEGES;
-
-    - name: Получение текущего лог-файла и позиции
-      community.mysql.mysql_query:
-        login_host: 127.0.0.1
-        login_port: "{{ mysql_primary_port }}"
-        login_user: root
-        login_password: "{{ mysql_root_password }}"
-        query: "SHOW MASTER STATUS;"
-      register: master_status
-
-    - name: Установка переменных для репликации
-      ansible.builtin.set_fact:
-        master_log_file: "{{ master_status.query_result[0][0].File }}"
-        master_log_pos: "{{ master_status.query_result[0][0].Position }}"
-
-    - name: Проверка, что репликация настроена
-      ansible.builtin.assert:
-        that:
-          - master_log_file is defined
-          - master_log_pos is defined
-        fail_msg: "Не удалось получить информацию о мастер-лог-файле и позиции."
+        name: "{{ repl_user }}"
+        password: "{{ repl_password }}"
+        host: "%"
+        priv: "*.*:REPLICATION SLAVE"
+        state: present
 
     # Создание и настройка реплики MySQL
 
@@ -123,9 +121,11 @@
           MYSQL_ROOT_PASSWORD: "{{ mysql_root_password }}"
         command: >
           --server-id=2
-          --relay-log=relay-bin
           --log-bin=mysql-bin
+          --gtid-mode=ON
+          --enforce-gtid-consistency
           --binlog-format=ROW
+          --relay-log=relay-log
           --bind-address=0.0.0.0
         volumes:
           - mysql_replica_data:/var/lib/mysql
@@ -135,40 +135,65 @@
         host: 127.0.0.1
         port: "{{ mysql_replica_port }}"
         delay: 5
+        timeout: 60
+
+    - name: Ожидание доступности MySQL Replica
+      community.mysql.mysql_info:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        login_host: 127.0.0.1
+        login_port: "{{ mysql_replica_port }}"
+      register: mysql_replica_reachable
+      until: mysql_replica_reachable is success
+      retries: 30
+      delay: 10
+      become: true
 
     - name: Настройка репликации MySQL
-      community.mysql.mysql_query:
+      community.mysql.mysql_replication:
+        mode: changeprimary
         login_host: 127.0.0.1
         login_port: "{{ mysql_replica_port }}"
         login_user: root
         login_password: "{{ mysql_root_password }}"
-        query: |
-          STOP SLAVE;
-          CHANGE MASTER TO
-            MASTER_HOST='mysql_primary',
-            MASTER_PORT = 3306,
-            MASTER_USER='{{ repl_user }}',
-            MASTER_PASSWORD='{{ repl_password }}',
-            MASTER_LOG_FILE='{{ master_log_file }}',
-            MASTER_LOG_POS={{ master_log_pos }};
-          START SLAVE;
+        master_host: mysql_primary
+        master_port: 3306
+        master_user: "{{ repl_user }}"
+        master_password: "{{ repl_password }}"
+        master_auto_position: true
+
+    - name: Запуск репликации
+      community.mysql.mysql_replication:
+        mode: startreplica
+        login_host: 127.0.0.1
+        login_port: "{{ mysql_replica_port }}"
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
 
     - name: Проверка статуса репликации MySQL
-      community.mysql.mysql_query:
+      community.mysql.mysql_replication:
+        mode: getreplica
         login_host: 127.0.0.1
         login_port: "{{ mysql_replica_port }}"
         login_user: root
         login_password: "{{ mysql_root_password }}"
-        query: "SHOW SLAVE STATUS;"
       register: replica_status
-      ignore_errors: true
 
     - name: Проверка успешности репликации
       ansible.builtin.assert:
         that:
-          - replica_status.query_result[0][0].Slave_IO_Running == 'Yes'
-          - replica_status.query_result[0][0].Slave_SQL_Running == 'Yes'
-        fail_msg: "Репликация MySQL не настроена корректно."
+          - replica_status.Slave_IO_Running == 'Yes'
+          - replica_status.Slave_SQL_Running == 'Yes'
+        fail_msg: "Репликация MySQL не настроена корректно {{ replica_status }}."
+
+    - name: Создание тестовой базы данных на мастере для проверки репликации
+      community.mysql.mysql_db:
+        name: "wordpress2"
+        login_host: 127.0.0.1
+        login_port: "{{ mysql_primary_port }}"
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        state: present
 
     - name: Запуск WordPress в контейнере
       community.docker.docker_container:
