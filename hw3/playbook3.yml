@@ -38,7 +38,7 @@
         command: >
           --config.my-cnf=false
           --mysqld.username=exporter
-          --mysqld.address="mysql_primary:{{ mysqld_exporter_primary_port }}"
+          --mysqld.address="mysql_primary:3306"
         networks:
           - name: wp_net
         published_ports:
@@ -62,7 +62,7 @@
         command: >
           --config.my-cnf=false
           --mysqld.username=exporter
-          --mysqld.address="mysql_primary:{{ mysqld_exporter_replica_port }}"
+          --mysqld.address="mysql_primary:3306"
         networks:
           - name: wp_net
         published_ports:
@@ -103,12 +103,22 @@
         state: started
         published_ports:
           - "{{ grafana_port }}:3000"
+        volumes:
+          - grafana_data:/var/lib/grafana
+          - ./provisioning/datasources:/etc/grafana/provisioning/datasources
+          - ./provisioning/dashboards:/etc/grafana/provisioning/dashboards
+          - ./provisioning/dashboards:/var/lib/grafana/dashboards
         networks:
           - name: wp_net
         env:
           GF_SECURITY_ADMIN_USER: "{{ grafana_user }}"
           GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_password }}"
           GF_SERVER_HTTP_ADDR: "0.0.0.0"
+        healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+          interval: 10s
+          timeout: 5s
+          retries: 10
     
     - name: Проверка что Grafana доступна
       wait_for:
@@ -116,16 +126,6 @@
         port: "{{ grafana_port }}"
         timeout: 60
         delay: 5
-
-    - name: Импорт дашборда номер 7362
-      community.grafana.grafana_dashboard:
-        grafana_url: "http://localhost:{{ grafana_port }}"
-        grafana_user: "{{ grafana_user }}"
-        grafana_password: "{{ grafana_password }}"
-        dashboard_id: 7362
-        overwrite: true
-        state: present
-
 
   pre_tasks:
     - name: Ожидание доступности mysql_primary
