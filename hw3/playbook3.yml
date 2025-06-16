@@ -24,7 +24,7 @@
       community.docker.docker_image:
         name: prom/prometheus:latest
         source: pull
-    
+
     - name: Получение образа grafana
       community.docker.docker_image:
         name: grafana/grafana:latest
@@ -60,7 +60,7 @@
           - "{{ mysqld_exporter_primary_port }}:9104"
 
     - name: Проверка что mysqld_exporter_primary доступен
-      wait_for:
+      ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ mysqld_exporter_primary_port }}"
         timeout: 60
@@ -84,7 +84,7 @@
           - "{{ mysqld_exporter_replica_port }}:9104"
 
     - name: Проверка что mysqld_exporter_replica доступен
-      wait_for:
+      ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ mysqld_exporter_replica_port }}"
         timeout: 60
@@ -104,7 +104,7 @@
           - name: wp_net
 
     - name: Проверка что Prometheus доступен
-      wait_for:
+      ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ prometheus_port }}"
         timeout: 60
@@ -129,9 +129,9 @@
           GF_SECURITY_ADMIN_USER: "{{ grafana_user }}"
           GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_password }}"
           GF_SERVER_HTTP_ADDR: "0.0.0.0"
-    
+
     - name: Проверка что Grafana доступна
-      uri:
+      ansible.builtin.uri:
         url: "http://localhost:3001/api/health"
         method: GET
         status_code: 200
@@ -142,13 +142,13 @@
 
   pre_tasks:
     - name: Ожидание доступности mysql_primary
-      wait_for:
+      ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ mysql_primary_port }}"
         timeout: 60
 
     - name: Ожидание доступности mysql_replica
-      wait_for:
+      ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ mysql_replica_port }}"
         timeout: 60
