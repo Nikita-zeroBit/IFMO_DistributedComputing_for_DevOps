@@ -15,6 +15,21 @@
     grafana_password: admin
 
   tasks:
+    - name: Получение образа mysqld-exporter
+      community.docker.docker_image:
+        name: prom/mysqld-exporter:latest
+        source: pull
+
+    - name: Получение образа prometheus
+      community.docker.docker_image:
+        name: prom/prometheus:latest
+        source: pull
+    
+    - name: Получение образа grafana
+      community.docker.docker_image:
+        name: grafana/grafana:latest
+        source: pull
+
     - name: Создание пользователя на Мастере MySQL # Должен реплицировать и на реплику
       community.mysql.mysql_user:
         login_host: 127.0.0.1
