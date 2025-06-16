@@ -1,0 +1,141 @@
+---
+- name: Установка мониторинга для MySQL-кластера
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    mysql_root_password: root1234
+    mysqld_exporter_primary_port: 9105
+    mysqld_exporter_replica_port: 9106
+    prometheus_port: 9091
+    grafana_port: 3001
+    mysql_primary_port: 3307
+    mysql_replica_port: 3308
+    grafana_user: admin
+    grafana_password: admin
+
+  tasks:
+    - name: Создание пользователя на Мастере MySQL # Должен реплицировать и на реплику
+      community.mysql.mysql_user:
+        login_host: 127.0.0.1
+        login_port: "{{ mysql_primary_port }}"
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        name: exporter
+        password: exporter_pass
+        priv: "*.*:PROCESS,REPLICATION CLIENT,SELECT"
+        host: "%"
+        state: present
+
+    - name: Запуск mysqld_exporter для мастера
+      community.docker.docker_container:
+        name: mysqld_exporter_primary
+        image: prom/mysqld-exporter:latest
+        restart_policy: always
+        state: started
+        env:
+          MYSQLD_EXPORTER_PASSWORD: exporter_pass
+        command: >
+          --config.my-cnf=false
+          --mysqld.username=exporter
+          --mysqld.address="mysql_primary:{{ mysqld_exporter_primary_port }}"
+        networks:
+          - name: wp_net
+        published_ports:
+          - "{{ mysqld_exporter_primary_port }}:9104"
+
+    - name: Проверка что mysqld_exporter_primary доступен
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ mysqld_exporter_primary_port }}"
+        timeout: 60
+        delay: 5
+
+    - name: Запуск mysqld_exporter для реплики
+      community.docker.docker_container:
+        name: mysqld_exporter_replica
+        image: prom/mysqld-exporter:latest
+        restart_policy: always
+        state: started
+        env:
+          MYSQLD_EXPORTER_PASSWORD: exporter_pass
+        command: >
+          --config.my-cnf=false
+          --mysqld.username=exporter
+          --mysqld.address="mysql_primary:{{ mysqld_exporter_replica_port }}"
+        networks:
+          - name: wp_net
+        published_ports:
+          - "{{ mysqld_exporter_replica_port }}:9104"
+
+    - name: Проверка что mysqld_exporter_replica доступен
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ mysqld_exporter_replica_port }}"
+        timeout: 60
+        delay: 5
+
+    - name: Запуск Prometheus
+      community.docker.docker_container:
+        name: prometheus
+        image: prom/prometheus:latest
+        restart_policy: always
+        state: started
+        volumes:
+          - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+        published_ports:
+          - "{{ prometheus_port }}:9090"
+        networks:
+          - name: wp_net
+
+    - name: Проверка что Prometheus доступен
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ prometheus_port }}"
+        timeout: 60
+        delay: 5
+
+    - name: Запуск Grafana
+      community.docker.docker_container:
+        name: grafana
+        image: grafana/grafana:latest
+        restart_policy: always
+        state: started
+        published_ports:
+          - "{{ grafana_port }}:3000"
+        networks:
+          - name: wp_net
+        env:
+          GF_SECURITY_ADMIN_USER: "{{ grafana_user }}"
+          GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_password }}"
+          GF_SERVER_HTTP_ADDR: "0.0.0.0"
+    
+    - name: Проверка что Grafana доступна
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ grafana_port }}"
+        timeout: 60
+        delay: 5
+
+    - name: Импорт дашборда номер 7362
+      community.grafana.grafana_dashboard:
+        grafana_url: "http://localhost:{{ grafana_port }}"
+        grafana_user: "{{ grafana_user }}"
+        grafana_password: "{{ grafana_password }}"
+        dashboard_id: 7362
+        overwrite: true
+        state: present
+
+
+  pre_tasks:
+    - name: Ожидание доступности mysql_primary
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ mysql_primary_port }}"
+        timeout: 60
+
+    - name: Ожидание доступности mysql_replica
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ mysql_replica_port }}"
+        timeout: 60
